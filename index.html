@@ -222,10 +222,17 @@
     <p id="meter">&nbsp;</p>
 
     <div class="row">
+      <label for="fill">Fill screen
+        <small>Sizes the clock as large as it will go. Turn off for manual control.</small>
+      </label>
+      <input type="checkbox" id="fill">
+    </div>
+
+    <div class="row" id="rowSize">
       <label for="size">Glyph size
         <small>Auto-shrinks if it would overflow the screen.</small>
       </label>
-      <input type="range" id="size" min="7" max="45" step="1">
+      <input type="range" id="size" min="7" max="90" step="1">
     </div>
 
     <div class="row">
@@ -293,16 +300,20 @@
 
   // Bump this on every edit you deploy. It's the fastest way to tell whether
   // the phone is showing the new file or a cached copy of the old one.
-  const VERSION = "1.3.0";
+  const VERSION = "1.4.0";
 
   const SHIFT_SECONDS = 60;
   const HUE_SECONDS   = 3600;
   const TAP_HOLD_MS   = 6000;
   const LONG_PRESS_MS = 600;
   const EDGE_INSET    = 12;
+  // In fill mode, hold back this fraction of the screen so the clock still
+  // has somewhere to drift. Filling edge to edge would freeze it in place.
+  const DRIFT_RESERVE = 0.12;
 
   const DEFAULTS = {
-    size: 28,          // vmin, before auto-fit
+    fill: true,        // solve for the largest size that fits
+    size: 28,          // vmin, used when fill is off
     outline: false,
     dim: 45,
     cycle: true,
@@ -368,19 +379,22 @@
   // axis. One corrective pass is enough because the scaling is linear.
   function fit() {
     const vmin = Math.min(window.innerWidth, window.innerHeight) / 100;
-    let px = cfg.size * vmin;
+    // Fill mode starts deliberately oversized and lets the measurement below
+    // scale it down to exactly what fits. Font metrics scale linearly, so a
+    // single corrective pass lands it.
+    let px = cfg.fill ? vmin * 100 : cfg.size * vmin;
     root.style.setProperty("--size", px.toFixed(1) + "px");
 
-    const availW = window.innerWidth  - EDGE_INSET * 2;
-    const availH = window.innerHeight - EDGE_INSET * 2;
+    const reserve  = cfg.fill ? DRIFT_RESERVE : 0;
+    const availW = window.innerWidth  * (1 - reserve) - EDGE_INSET * 2;
+    const availH = window.innerHeight * (1 - reserve) - EDGE_INSET * 2;
     const w = face.scrollWidth, h = face.scrollHeight;
 
     if (w > 0 && h > 0) {
-      const scale = Math.min(availW / w, availH / h, 1);
-      if (scale < 1) {
-        px *= scale;
-        root.style.setProperty("--size", px.toFixed(1) + "px");
-      }
+      let scale = Math.min(availW / w, availH / h);
+      if (!cfg.fill) scale = Math.min(scale, 1);   // slider mode only shrinks
+      px *= scale;
+      root.style.setProperty("--size", px.toFixed(1) + "px");
     }
 
     // Stroke stays thin in device pixels regardless of glyph size.
@@ -513,6 +527,7 @@
 
   // ---- Settings ----------------------------------------------------------
   const controls = {
+    fill:      { el: $("fill"),      kind: "bool" },
     size:      { el: $("size"),      kind: "num"  },
     outline:   { el: $("outline"),   kind: "bool" },
     dim:       { el: $("dim"),       kind: "num"  },
@@ -531,6 +546,7 @@
     }
     $("rowTime").classList.toggle("muted", cfg.cycle);
     $("rowShort").classList.toggle("muted", !cfg.showDay);
+    $("rowSize").classList.toggle("muted", cfg.fill);
 
     // Large glyphs eat the horizontal drift range. Say so plainly.
     const tight = slackX < window.innerWidth * 0.04;
