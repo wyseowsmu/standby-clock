@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Clock">
+<meta name="theme-color" content="#000000">
+<title>Clock</title>
+<style>
+  :root {
+    --bg: #000000;
+    --ink: #9fb4c7;
+    --size: 13vmin;
+    --stroke-w: 1.3px;
+    --panel: #0e0e10;
+    --panel-line: #26262b;
+    --panel-text: #8b8b93;
+    --panel-head: #d6d6dc;
+    --warn: #c9a227;
+  }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    transition: background-color .6s linear;
+  }
+
+  #stage {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+  }
+
+  /* Day and time drift as one block, so neither becomes a static element. */
+  #face {
+    text-align: center;
+    color: var(--ink);
+    font-family: ui-rounded, "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+    will-change: transform, opacity;
+    transition: opacity .45s ease;
+  }
+
+  #day {
+    font-weight: 300;
+    font-size: calc(var(--size) * 0.26);
+    letter-spacing: .28em;
+    text-transform: uppercase;
+    margin-bottom: .5em;
+    opacity: .62;
+  }
+  #day[hidden] { display: none; }
+
+  #time {
+    font-weight: 100;
+    font-size: var(--size);
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  /* Outline mode: only the contour is lit, at a fixed width regardless of size. */
+  #time.outline {
+    color: transparent;
+    font-weight: 400;
+    -webkit-text-stroke: var(--stroke-w) var(--ink);
+  }
+
+  #gear {
+    position: fixed;
+    bottom: calc(env(safe-area-inset-bottom) + 18px);
+    right: calc(env(safe-area-inset-right) + 18px);
+    width: 40px; height: 40px;
+    display: grid; place-items: center;
+    border: 0; padding: 0;
+    background: none;
+    color: var(--panel-text);
+    font-size: 19px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .45s ease;
+  }
+  #gear.on { opacity: .5; pointer-events: auto; }
+
+  /* ---- Settings ---- */
+  #panel {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: none;
+    background: rgba(0,0,0,.8);
+    font-family: -apple-system, system-ui, sans-serif;
+  }
+  #panel.on { display: block; }
+
+  #sheet {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    background: var(--panel);
+    border-top: 1px solid var(--panel-line);
+    border-radius: 20px 20px 0 0;
+    padding: 22px 22px calc(env(safe-area-inset-bottom) + 22px);
+    max-height: 86%;
+    overflow-y: auto;
+    color: var(--panel-text);
+    font-size: 15px;
+  }
+
+  #sheet h2 {
+    margin: 0 0 4px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--panel-head);
+  }
+
+  #meter {
+    margin: 0 0 16px;
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    opacity: .75;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 13px 0;
+    border-top: 1px solid var(--panel-line);
+  }
+  .row label { flex: 1; }
+  .row small {
+    display: block;
+    margin-top: 3px;
+    font-size: 12px;
+    opacity: .6;
+    line-height: 1.35;
+  }
+  .row.muted { opacity: .35; pointer-events: none; }
+
+  input[type=color] {
+    width: 44px; height: 30px;
+    padding: 0;
+    border: 1px solid var(--panel-line);
+    border-radius: 7px;
+    background: none;
+    flex: none;
+  }
+  input[type=range] { width: 120px; flex: none; accent-color: var(--panel-head); }
+  input[type=checkbox] { width: 20px; height: 20px; flex: none; accent-color: var(--panel-head); }
+
+  .note {
+    display: none;
+    margin: 16px 0 0;
+    padding: 11px 13px;
+    border-left: 2px solid var(--warn);
+    border-radius: 0;
+    color: var(--warn);
+    font-size: 12.5px;
+    line-height: 1.45;
+  }
+  .note.on { display: block; }
+
+  .actions { display: flex; gap: 10px; margin-top: 20px; }
+  .actions button {
+    flex: 1;
+    padding: 13px;
+    border-radius: 11px;
+    border: 1px solid var(--panel-line);
+    background: none;
+    color: var(--panel-head);
+    font-size: 15px;
+    font-family: inherit;
+  }
+  .actions button.primary { background: #1e1e23; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #face, body { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <div id="face">
+    <div id="day">&nbsp;</div>
+    <div id="time">&nbsp;</div>
+  </div>
+</div>
+
+<button id="gear" aria-label="Settings">&#9881;</button>
+
+<div id="panel" role="dialog" aria-label="Clock settings">
+  <div id="sheet">
+    <h2>Clock</h2>
+    <p id="meter">&nbsp;</p>
+
+    <div class="row">
+      <label for="size">Glyph size</label>
+      <input type="range" id="size" min="7" max="24" step="1">
+    </div>
+
+    <div class="row">
+      <label for="outline">Outline only
+        <small>Lights the contour at a fixed width, so size stops driving pixel count.</small>
+      </label>
+      <input type="checkbox" id="outline">
+    </div>
+
+    <div class="row">
+      <label for="dim">Resting dimness</label>
+      <input type="range" id="dim" min="10" max="100" step="5">
+    </div>
+
+    <div class="row">
+      <label for="cycle">Cycle colours
+        <small>Rotates hue hourly to spread wear across R/G/B subpixels.</small>
+      </label>
+      <input type="checkbox" id="cycle">
+    </div>
+
+    <div class="row" id="rowTime">
+      <label for="timeColor">Time colour</label>
+      <input type="color" id="timeColor">
+    </div>
+
+    <div class="row">
+      <label for="bgColor">Background
+        <small>Black keeps OLED pixels switched off entirely.</small>
+      </label>
+      <input type="color" id="bgColor">
+    </div>
+
+    <div class="row">
+      <label for="hour24">24-hour time
+        <small>Drops AM/PM.</small>
+      </label>
+      <input type="checkbox" id="hour24">
+    </div>
+
+    <div class="row">
+      <label for="showDay">Show day of week</label>
+      <input type="checkbox" id="showDay">
+    </div>
+
+    <div class="row" id="rowShort">
+      <label for="dayShort">Abbreviate day</label>
+      <input type="checkbox" id="dayShort">
+    </div>
+
+    <p id="noteOutline" class="note"></p>
+    <p id="noteBg" class="note"></p>
+
+    <div class="actions">
+      <button id="reset">Reset</button>
+      <button id="close" class="primary">Done</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const SHIFT_SECONDS = 60;
+  const HUE_SECONDS   = 3600;
+  const TAP_HOLD_MS   = 6000;
+  const LONG_PRESS_MS = 600;
+  const EDGE_INSET    = 14;   // keep this far clear of the screen edge
+
+  const DEFAULTS = {
+    size: 13,          // vmin
+    outline: false,
+    dim: 45,           // resting opacity, %
+    cycle: true,
+    timeColor: "#9fb4c7",
+    bgColor: "#000000",
+    hour24: false,
+    showDay: true,
+    dayShort: false
+  };
+
+  // ---- Storage (falls back to memory where it's unavailable) -------------
+  const store = (() => {
+    let mem = null, ok = false;
+    try {
+      localStorage.setItem("__probe", "1");
+      localStorage.removeItem("__probe");
+      ok = true;
+    } catch (e) { /* private mode, sandboxed frame, or disabled */ }
+    return {
+      load() {
+        try {
+          const raw = ok ? localStorage.getItem("clock") : mem;
+          return raw ? JSON.parse(raw) : null;
+        } catch (e) { return null; }
+      },
+      save(obj) {
+        const raw = JSON.stringify(obj);
+        try { if (ok) localStorage.setItem("clock", raw); else mem = raw; }
+        catch (e) { mem = raw; }
+      }
+    };
+  })();
+
+  let cfg = Object.assign({}, DEFAULTS, store.load() || {});
+
+  const $ = id => document.getElementById(id);
+  const root = document.documentElement;
+  const face = $("face"), dayEl = $("day"), timeEl = $("time");
+  const stage = $("stage"), gear = $("gear"), panel = $("panel");
+
+  let bright = false, brightTimer = null, tickTimer = null;
+
+  function timeFmt() {
+    const o = { hour: "numeric", minute: "2-digit" };
+    if (cfg.hour24) o.hourCycle = "h23";
+    return new Intl.DateTimeFormat(undefined, o);
+  }
+  function dayFmt() {
+    return new Intl.DateTimeFormat(undefined, { weekday: cfg.dayShort ? "short" : "long" });
+  }
+  let tFmt = timeFmt(), dFmt = dayFmt();
+
+  // ---- Painting ----------------------------------------------------------
+  function applyStyle() {
+    root.style.setProperty("--size", cfg.size + "vmin");
+    root.style.setProperty("--bg", cfg.bgColor);
+    // Stroke stays thin and roughly constant in device pixels.
+    const px = cfg.size * Math.min(window.innerWidth, window.innerHeight) / 100;
+    root.style.setProperty("--stroke-w", Math.max(1, Math.min(2.2, px / 42)).toFixed(2) + "px");
+    timeEl.classList.toggle("outline", cfg.outline);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", cfg.bgColor);
+  }
+
+  function paint() {
+    const now = Date.now();
+    const t = now / 1000;
+
+    timeEl.textContent = tFmt.format(now);
+    dayEl.hidden = !cfg.showDay;
+    if (cfg.showDay) dayEl.textContent = dFmt.format(now);
+
+    // Colour first: outline mode reads it from --ink, not from `color`.
+    const ink = cfg.cycle
+      ? `hsl(${(((t / HUE_SECONDS) % 1) * 360).toFixed(1)} 35% 62%)`
+      : cfg.timeColor;
+    root.style.setProperty("--ink", ink);
+
+    // Drift amplitude from the slack actually left on screen, so a smaller
+    // clock automatically roams further. offsetWidth ignores the transform.
+    const ax = Math.max(0, (window.innerWidth  - face.offsetWidth ) / 2 - EDGE_INSET);
+    const ay = Math.max(0, (window.innerHeight - face.offsetHeight) / 2 - EDGE_INSET);
+
+    const step = Math.floor(t / SHIFT_SECONDS);
+    const dx = Math.sin(step * 0.70) * ax;
+    const dy = Math.cos(step * 0.31) * ay;
+    face.style.transform = `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px)`;
+
+    face.style.opacity = bright ? 1 : cfg.dim / 100;
+  }
+
+  function tick() {
+    paint();
+    clearTimeout(tickTimer);
+    tickTimer = setTimeout(tick, 60000 - (Date.now() % 60000) + 30);
+  }
+
+  // ---- Lit pixel measurement --------------------------------------------
+  // Renders the current face to an offscreen canvas and sums coverage.
+  // Runs only when settings change, never on the minute tick.
+  function measure() {
+    try {
+      const vmin = Math.min(window.innerWidth, window.innerHeight);
+      const px = cfg.size * vmin / 100;
+      const text = tFmt.format(Date.now());
+      const pad = 40;
+
+      const c = document.createElement("canvas");
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      ctx.font = `${cfg.outline ? 400 : 100} ${px}px -apple-system, system-ui, sans-serif`;
+      const w = Math.ceil(ctx.measureText(text).width) + pad * 2;
+      const h = Math.ceil(px * 1.6) + pad * 2;
+      c.width = w; c.height = h;
+
+      ctx.font = `${cfg.outline ? 400 : 100} ${px}px -apple-system, system-ui, sans-serif`;
+      ctx.textBaseline = "middle";
+      if (cfg.outline) {
+        ctx.lineWidth = parseFloat(root.style.getPropertyValue("--stroke-w")) || 1.3;
+        ctx.strokeStyle = "#fff";
+        ctx.strokeText(text, pad, h / 2);
+      } else {
+        ctx.fillStyle = "#fff";
+        ctx.fillText(text, pad, h / 2);
+      }
+
+      const data = ctx.getImageData(0, 0, w, h).data;
+      let sum = 0;
+      for (let i = 3; i < data.length; i += 4) sum += data[i];
+      const lit = sum / 255;                       // antialias-weighted
+      const screen = window.innerWidth * window.innerHeight;
+      const energy = lit * (cfg.dim / 100);        // dimness scales draw too
+
+      $("meter").textContent =
+        `${Math.round(lit).toLocaleString()} lit px · `
+        + `${(lit / screen * 100).toFixed(2)}% of screen · `
+        + `energy index ${Math.round(energy).toLocaleString()}`;
+    } catch (e) {
+      $("meter").textContent = "";
+    }
+  }
+
+  // ---- Screen wake lock --------------------------------------------------
+  let lock = null;
+  async function acquireLock() {
+    if (!("wakeLock" in navigator) || lock) return;
+    try {
+      lock = await navigator.wakeLock.request("screen");
+      lock.addEventListener("release", () => { lock = null; });
+    } catch (e) { /* retried on next tap or visibility change */ }
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") { acquireLock(); tick(); }
+  });
+
+  // ---- Interaction -------------------------------------------------------
+  function boost() {
+    bright = true;
+    gear.classList.add("on");
+    paint();
+    clearTimeout(brightTimer);
+    brightTimer = setTimeout(() => {
+      bright = false;
+      gear.classList.remove("on");
+      paint();
+    }, TAP_HOLD_MS);
+  }
+
+  let pressTimer = null, longPress = false;
+  stage.addEventListener("pointerdown", () => {
+    longPress = false;
+    pressTimer = setTimeout(() => { longPress = true; openPanel(); }, LONG_PRESS_MS);
+  });
+  stage.addEventListener("pointerup", () => {
+    clearTimeout(pressTimer);
+    acquireLock();
+    if (!longPress) boost();
+  });
+  stage.addEventListener("pointercancel", () => clearTimeout(pressTimer));
+  stage.addEventListener("contextmenu", e => e.preventDefault());
+  gear.addEventListener("click", e => { e.stopPropagation(); openPanel(); });
+  window.addEventListener("resize", () => { applyStyle(); paint(); });
+
+  // ---- Settings ----------------------------------------------------------
+  const controls = {
+    size:      { el: $("size"),      kind: "num"  },
+    outline:   { el: $("outline"),   kind: "bool" },
+    dim:       { el: $("dim"),       kind: "num"  },
+    cycle:     { el: $("cycle"),     kind: "bool" },
+    timeColor: { el: $("timeColor"), kind: "text" },
+    bgColor:   { el: $("bgColor"),   kind: "text" },
+    hour24:    { el: $("hour24"),    kind: "bool" },
+    showDay:   { el: $("showDay"),   kind: "bool" },
+    dayShort:  { el: $("dayShort"),  kind: "bool" }
+  };
+
+  function syncControls() {
+    for (const [key, c] of Object.entries(controls)) {
+      if (c.kind === "bool") c.el.checked = cfg[key];
+      else c.el.value = cfg[key];
+    }
+    $("rowTime").classList.toggle("muted", cfg.cycle);
+    $("rowShort").classList.toggle("muted", !cfg.showDay);
+
+    const nO = $("noteOutline");
+    const thin = cfg.outline && cfg.size < 14;
+    nO.classList.toggle("on", thin);
+    if (thin) {
+      nO.textContent = "At this size the filled strokes are already about as thin "
+        + "as the outline, so outlining saves little and costs legibility. "
+        + "Outline pays off above roughly 16.";
+    }
+
+    const nB = $("noteBg");
+    const dark = cfg.bgColor.toLowerCase() === "#000000";
+    nB.classList.toggle("on", !dark);
+    if (!dark) {
+      nB.textContent = "A non-black background lights every pixel on the screen all "
+        + "night and can't be shifted the way the digits are. Expect faster burn-in "
+        + "and noticeably more drain.";
+    }
+
+    measure();
+  }
+
+  for (const [key, c] of Object.entries(controls)) {
+    c.el.addEventListener("input", () => {
+      cfg[key] = c.kind === "bool" ? c.el.checked
+               : c.kind === "num"  ? Number(c.el.value)
+               : c.el.value;
+      if (key === "hour24") tFmt = timeFmt();
+      if (key === "dayShort") dFmt = dayFmt();
+      store.save(cfg);
+      applyStyle();
+      paint();
+      syncControls();
+    });
+  }
+
+  function openPanel()  { syncControls(); panel.classList.add("on"); }
+  function closePanel() { panel.classList.remove("on"); boost(); }
+
+  $("close").addEventListener("click", closePanel);
+  panel.addEventListener("click", e => { if (e.target === panel) closePanel(); });
+  $("reset").addEventListener("click", () => {
+    cfg = Object.assign({}, DEFAULTS);
+    tFmt = timeFmt(); dFmt = dayFmt();
+    store.save(cfg);
+    applyStyle();
+    paint();
+    syncControls();
+  });
+
+  applyStyle();
+  acquireLock();
+  tick();
+})();
+</script>
+
+</body>
+</html>
