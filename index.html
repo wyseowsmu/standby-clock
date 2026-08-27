@@ -13,8 +13,8 @@
   :root {
     --bg: #000000;
     --ink: #9fb4c7;
-    --size: 13vmin;
-    --stroke-w: 1.3px;
+    --size: 28vmin;
+    --stroke-w: 1.6px;
     --panel: #0e0e10;
     --panel-line: #26262b;
     --panel-text: #8b8b93;
@@ -53,11 +53,12 @@
 
   #day {
     font-weight: 300;
-    font-size: calc(var(--size) * 0.26);
+    font-size: calc(var(--size) * 0.22);
     letter-spacing: .28em;
     text-transform: uppercase;
     margin-bottom: .5em;
     opacity: .62;
+    white-space: nowrap;
   }
   #day[hidden] { display: none; }
 
@@ -117,12 +118,26 @@
   }
 
   #sheet h2 {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
     margin: 0 0 4px;
     font-size: 13px;
     font-weight: 600;
     letter-spacing: .14em;
     text-transform: uppercase;
     color: var(--panel-head);
+  }
+
+  #ver {
+    font-weight: 400;
+    font-size: 11.5px;
+    letter-spacing: .06em;
+    text-transform: none;
+    font-variant-numeric: tabular-nums;
+    color: var(--panel-text);
+    opacity: .7;
   }
 
   #meter {
@@ -166,7 +181,6 @@
     margin: 16px 0 0;
     padding: 11px 13px;
     border-left: 2px solid var(--warn);
-    border-radius: 0;
     color: var(--warn);
     font-size: 12.5px;
     line-height: 1.45;
@@ -204,12 +218,14 @@
 
 <div id="panel" role="dialog" aria-label="Clock settings">
   <div id="sheet">
-    <h2>Clock</h2>
+    <h2>Clock <span id="ver"></span></h2>
     <p id="meter">&nbsp;</p>
 
     <div class="row">
-      <label for="size">Glyph size</label>
-      <input type="range" id="size" min="7" max="24" step="1">
+      <label for="size">Glyph size
+        <small>Auto-shrinks if it would overflow the screen.</small>
+      </label>
+      <input type="range" id="size" min="7" max="45" step="1">
     </div>
 
     <div class="row">
@@ -245,7 +261,7 @@
 
     <div class="row">
       <label for="hour24">24-hour time
-        <small>Drops AM/PM.</small>
+        <small>Drops AM/PM, which buys back a lot of width.</small>
       </label>
       <input type="checkbox" id="hour24">
     </div>
@@ -260,6 +276,7 @@
       <input type="checkbox" id="dayShort">
     </div>
 
+    <p id="noteDrift" class="note"></p>
     <p id="noteOutline" class="note"></p>
     <p id="noteBg" class="note"></p>
 
@@ -274,16 +291,20 @@
 (() => {
   "use strict";
 
+  // Bump this on every edit you deploy. It's the fastest way to tell whether
+  // the phone is showing the new file or a cached copy of the old one.
+  const VERSION = "1.3.0";
+
   const SHIFT_SECONDS = 60;
   const HUE_SECONDS   = 3600;
   const TAP_HOLD_MS   = 6000;
   const LONG_PRESS_MS = 600;
-  const EDGE_INSET    = 14;   // keep this far clear of the screen edge
+  const EDGE_INSET    = 12;
 
   const DEFAULTS = {
-    size: 13,          // vmin
+    size: 28,          // vmin, before auto-fit
     outline: false,
-    dim: 45,           // resting opacity, %
+    dim: 45,
     cycle: true,
     timeColor: "#9fb4c7",
     bgColor: "#000000",
@@ -323,6 +344,7 @@
   const stage = $("stage"), gear = $("gear"), panel = $("panel");
 
   let bright = false, brightTimer = null, tickTimer = null;
+  let fittedPx = 0, slackX = 0;   // reported to the settings panel
 
   function timeFmt() {
     const o = { hour: "numeric", minute: "2-digit" };
@@ -334,18 +356,42 @@
   }
   let tFmt = timeFmt(), dFmt = dayFmt();
 
-  // ---- Painting ----------------------------------------------------------
+  // ---- Sizing ------------------------------------------------------------
   function applyStyle() {
-    root.style.setProperty("--size", cfg.size + "vmin");
     root.style.setProperty("--bg", cfg.bgColor);
-    // Stroke stays thin and roughly constant in device pixels.
-    const px = cfg.size * Math.min(window.innerWidth, window.innerHeight) / 100;
-    root.style.setProperty("--stroke-w", Math.max(1, Math.min(2.2, px / 42)).toFixed(2) + "px");
     timeEl.classList.toggle("outline", cfg.outline);
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.setAttribute("content", cfg.bgColor);
   }
 
+  // Sets --size in px, then shrinks it if the block would overflow either
+  // axis. One corrective pass is enough because the scaling is linear.
+  function fit() {
+    const vmin = Math.min(window.innerWidth, window.innerHeight) / 100;
+    let px = cfg.size * vmin;
+    root.style.setProperty("--size", px.toFixed(1) + "px");
+
+    const availW = window.innerWidth  - EDGE_INSET * 2;
+    const availH = window.innerHeight - EDGE_INSET * 2;
+    const w = face.scrollWidth, h = face.scrollHeight;
+
+    if (w > 0 && h > 0) {
+      const scale = Math.min(availW / w, availH / h, 1);
+      if (scale < 1) {
+        px *= scale;
+        root.style.setProperty("--size", px.toFixed(1) + "px");
+      }
+    }
+
+    // Stroke stays thin in device pixels regardless of glyph size.
+    root.style.setProperty("--stroke-w",
+      Math.max(1, Math.min(2.6, px / 42)).toFixed(2) + "px");
+
+    fittedPx = px;
+    return px;
+  }
+
+  // ---- Painting ----------------------------------------------------------
   function paint() {
     const now = Date.now();
     const t = now / 1000;
@@ -355,20 +401,22 @@
     if (cfg.showDay) dayEl.textContent = dFmt.format(now);
 
     // Colour first: outline mode reads it from --ink, not from `color`.
-    const ink = cfg.cycle
+    root.style.setProperty("--ink", cfg.cycle
       ? `hsl(${(((t / HUE_SECONDS) % 1) * 360).toFixed(1)} 35% 62%)`
-      : cfg.timeColor;
-    root.style.setProperty("--ink", ink);
+      : cfg.timeColor);
 
-    // Drift amplitude from the slack actually left on screen, so a smaller
-    // clock automatically roams further. offsetWidth ignores the transform.
+    fit();
+
+    // Drift amplitude from whatever slack is left. Bigger glyphs mean less
+    // room to roam, so this shrinks automatically rather than clipping.
     const ax = Math.max(0, (window.innerWidth  - face.offsetWidth ) / 2 - EDGE_INSET);
     const ay = Math.max(0, (window.innerHeight - face.offsetHeight) / 2 - EDGE_INSET);
+    slackX = ax;
 
     const step = Math.floor(t / SHIFT_SECONDS);
-    const dx = Math.sin(step * 0.70) * ax;
-    const dy = Math.cos(step * 0.31) * ay;
-    face.style.transform = `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px)`;
+    face.style.transform =
+      `translate(${(Math.sin(step * 0.70) * ax).toFixed(1)}px, `
+      + `${(Math.cos(step * 0.31) * ay).toFixed(1)}px)`;
 
     face.style.opacity = bright ? 1 : cfg.dim / 100;
   }
@@ -380,44 +428,42 @@
   }
 
   // ---- Lit pixel measurement --------------------------------------------
-  // Renders the current face to an offscreen canvas and sums coverage.
-  // Runs only when settings change, never on the minute tick.
   function measure() {
     try {
-      const vmin = Math.min(window.innerWidth, window.innerHeight);
-      const px = cfg.size * vmin / 100;
+      const px = fittedPx || cfg.size * Math.min(window.innerWidth, window.innerHeight) / 100;
       const text = tFmt.format(Date.now());
-      const pad = 40;
+      const pad = 60;
+      const weight = cfg.outline ? 400 : 100;
 
       const c = document.createElement("canvas");
       const ctx = c.getContext("2d", { willReadFrequently: true });
-      ctx.font = `${cfg.outline ? 400 : 100} ${px}px -apple-system, system-ui, sans-serif`;
-      const w = Math.ceil(ctx.measureText(text).width) + pad * 2;
-      const h = Math.ceil(px * 1.6) + pad * 2;
-      c.width = w; c.height = h;
+      const font = `${weight} ${px}px -apple-system, system-ui, sans-serif`;
+      ctx.font = font;
+      c.width  = Math.ceil(ctx.measureText(text).width) + pad * 2;
+      c.height = Math.ceil(px * 1.7) + pad * 2;
 
-      ctx.font = `${cfg.outline ? 400 : 100} ${px}px -apple-system, system-ui, sans-serif`;
+      ctx.font = font;
       ctx.textBaseline = "middle";
       if (cfg.outline) {
-        ctx.lineWidth = parseFloat(root.style.getPropertyValue("--stroke-w")) || 1.3;
+        ctx.lineWidth = parseFloat(root.style.getPropertyValue("--stroke-w")) || 1.6;
         ctx.strokeStyle = "#fff";
-        ctx.strokeText(text, pad, h / 2);
+        ctx.strokeText(text, pad, c.height / 2);
       } else {
         ctx.fillStyle = "#fff";
-        ctx.fillText(text, pad, h / 2);
+        ctx.fillText(text, pad, c.height / 2);
       }
 
-      const data = ctx.getImageData(0, 0, w, h).data;
+      const data = ctx.getImageData(0, 0, c.width, c.height).data;
       let sum = 0;
       for (let i = 3; i < data.length; i += 4) sum += data[i];
-      const lit = sum / 255;                       // antialias-weighted
+      const lit = sum / 255;
       const screen = window.innerWidth * window.innerHeight;
-      const energy = lit * (cfg.dim / 100);        // dimness scales draw too
 
       $("meter").textContent =
-        `${Math.round(lit).toLocaleString()} lit px · `
+        `${Math.round(px)}px glyphs · `
+        + `${Math.round(lit).toLocaleString()} lit px · `
         + `${(lit / screen * 100).toFixed(2)}% of screen · `
-        + `energy index ${Math.round(energy).toLocaleString()}`;
+        + `energy index ${Math.round(lit * cfg.dim / 100).toLocaleString()}`;
     } catch (e) {
       $("meter").textContent = "";
     }
@@ -486,17 +532,26 @@
     $("rowTime").classList.toggle("muted", cfg.cycle);
     $("rowShort").classList.toggle("muted", !cfg.showDay);
 
-    const nO = $("noteOutline");
-    const thin = cfg.outline && cfg.size < 14;
-    nO.classList.toggle("on", thin);
-    if (thin) {
-      nO.textContent = "At this size the filled strokes are already about as thin "
-        + "as the outline, so outlining saves little and costs legibility. "
-        + "Outline pays off above roughly 16.";
+    // Large glyphs eat the horizontal drift range. Say so plainly.
+    const tight = slackX < window.innerWidth * 0.04;
+    const nD = $("noteDrift");
+    nD.classList.toggle("on", tight);
+    if (tight) {
+      nD.textContent = "At this size there's almost no horizontal room left, so the "
+        + "clock can only drift vertically. Burn-in protection is weaker. Turning on "
+        + "24-hour time or abbreviating the day buys width back.";
     }
 
-    const nB = $("noteBg");
+    const thin = cfg.outline && cfg.size < 14;
+    const nO = $("noteOutline");
+    nO.classList.toggle("on", thin);
+    if (thin) {
+      nO.textContent = "At this size the filled strokes are already about as thin as "
+        + "the outline, so outlining saves little and costs legibility.";
+    }
+
     const dark = cfg.bgColor.toLowerCase() === "#000000";
+    const nB = $("noteBg");
     nB.classList.toggle("on", !dark);
     if (!dark) {
       nB.textContent = "A non-black background lights every pixel on the screen all "
@@ -534,6 +589,8 @@
     paint();
     syncControls();
   });
+
+  $("ver").textContent = "v" + VERSION;
 
   applyStyle();
   acquireLock();
